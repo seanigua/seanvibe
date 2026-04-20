@@ -1,0 +1,23 @@
+{
+  "name": "founder-tracker",
+  "version": "1.0.0",
+  "description": "VC scout founder signal tracker for DACH region",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "init-db": "node db/init.js",
+    "digest": "node src/digest/weekly.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
+    "axios": "^1.7.2",
+    "better-sqlite3": "^9.6.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.44.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
