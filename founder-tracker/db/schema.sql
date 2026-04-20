@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS runs (
   leads_passed_filter INTEGER DEFAULT 0
 );
 
+-- linkedin_url is the dedup key; must be UNIQUE for ON CONFLICT upserts to work.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_linkedin_url ON leads(linkedin_url)
+  WHERE linkedin_url IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_leads_raw_score ON leads(raw_score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_llm_score ON leads(llm_score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_seen_at ON leads(seen_at DESC);
