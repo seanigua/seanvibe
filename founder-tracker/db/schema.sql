@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS leads (
   club             TEXT,
   hackathon        TEXT,
   location         TEXT,
+  raw_bio          TEXT,
   thesis_keywords  TEXT,
   github_stars        INTEGER DEFAULT 0,
   github_repos        INTEGER DEFAULT 0,

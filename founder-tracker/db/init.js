@@ -10,6 +10,7 @@ const SCHEMA_PATH = path.resolve(__dirname, 'schema.sql');
 // SQLite has no ADD COLUMN IF NOT EXISTS, so each migration is wrapped in
 // try/catch; the "duplicate column name" error is silently swallowed.
 const COLUMN_MIGRATIONS = [
+  'ALTER TABLE leads ADD COLUMN raw_bio             TEXT',
   'ALTER TABLE leads ADD COLUMN github_followers   INTEGER DEFAULT 0',
   'ALTER TABLE leads ADD COLUMN github_bio         TEXT',
   'ALTER TABLE leads ADD COLUMN github_enriched_at DATETIME',
