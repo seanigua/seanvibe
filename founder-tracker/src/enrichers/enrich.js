@@ -1,7 +1,5 @@
 require('dotenv').config();
-const { chromium } = require('playwright');
 const { enrichFromGitHub, makeClient } = require('./github');
-const { enrichFromLinkedIn, liDelay }   = require('./linkedin');
 
 // ---------------------------------------------------------------------------
 // Signal #8 re-evaluation after real GitHub data arrives
@@ -39,17 +37,8 @@ function rescoreSignal8(lead) {
 // Main orchestrator
 // ---------------------------------------------------------------------------
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
 /**
- * Enrich a batch of ScoredLeads with GitHub and LinkedIn data.
- *
- * Processing order per lead:
- *   1. GitHub API enrichment (cached in-memory + DB)
- *   2. Signal #8 re-score with real star/follower counts
- *   3. LinkedIn Playwright enrichment (min 4 s between requests)
- *
- * Never throws — individual failures are logged and the lead is kept as-is.
+ * Enrich a batch of ScoredLeads with GitHub data (LinkedIn skipped — anti-bot).
  *
  * @param {object[]} leads   - ScoredLead[] (raw_score >= 4)
  * @param {import('better-sqlite3').Database} db
@@ -58,60 +47,28 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function enrichLeads(leads, db) {
   if (!leads.length) return [];
 
-  const githubClient    = makeClient();
-  const githubCache     = new Map();   // username → enrichment fields
+  const githubClient = makeClient();
+  const githubCache  = new Map();
+  const enriched     = [];
 
-  const needsLinkedIn = leads.some(l => l.linkedin_url);
-  let browser = null;
+  for (const lead of leads) {
+    let l = { ...lead };
 
-  try {
-    if (needsLinkedIn) {
-      browser = await chromium.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
-      console.log('[enrich] Playwright browser launched for LinkedIn enrichment');
-    }
-
-    const enriched = [];
-
-    for (const lead of leads) {
-      let l = { ...lead };
-
-      // --- GitHub ---
-      if (l.github_url) {
-        try {
-          l = await enrichFromGitHub(l, githubClient, githubCache, db);
-        } catch (err) {
-          console.warn(`[enrich] GitHub enrichment failed for ${l.name}: ${err.message}`);
-        }
-        // Always re-score signal #8 after GitHub attempt (even if it failed,
-        // re-scoring against zeros is safe and idempotent)
-        l = rescoreSignal8(l);
+    if (l.github_url) {
+      try {
+        l = await enrichFromGitHub(l, githubClient, githubCache, db);
+      } catch (err) {
+        console.warn(`[enrich] GitHub enrichment failed for ${l.name}: ${err.message}`);
       }
-
-      // --- LinkedIn ---
-      if (l.linkedin_url && browser) {
-        try {
-          l = await enrichFromLinkedIn(l, browser);
-        } catch (err) {
-          console.warn(`[enrich] LinkedIn enrichment failed for ${l.name}: ${err.message}`);
-        }
-        // Enforce min 4 s between LinkedIn requests regardless of outcome
-        await sleep(liDelay());
-      }
-
-      enriched.push(l);
+      l = rescoreSignal8(l);
     }
 
-    console.log(`[enrich] done — ${enriched.length} leads enriched`);
-    return enriched;
-  } finally {
-    if (browser) {
-      await browser.close().catch(() => {});
-      console.log('[enrich] Playwright browser closed');
-    }
+    // LinkedIn enrichment skipped — blocked by anti-bot. URL is preserved.
+    enriched.push(l);
   }
+
+  console.log(`[enrich] done — ${enriched.length} leads enriched`);
+  return enriched;
 }
 
 module.exports = { enrichLeads, rescoreSignal8 };

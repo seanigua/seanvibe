@@ -3,65 +3,67 @@ const axios = require('axios');
 const DELAY = () => parseInt(process.env.SCRAPE_DELAY_MS ?? 1500, 10);
 const GITHUB_API = 'https://api.github.com';
 
-// Unauthenticated: 10 req/min for search, 60/hr for REST.
-// Authenticated (GITHUB_TOKEN): 30 req/min for search, 5000/hr for REST.
-const DACH_LOCATIONS = ['Germany', 'Austria', 'Switzerland', 'Deutschland', 'Österreich', 'Schweiz'];
+const DACH_LOCATIONS = [
+  'Germany', 'Austria', 'Switzerland',
+  'Deutschland', 'Österreich', 'Schweiz',
+];
 const DACH_CITIES = [
-  'Berlin', 'Munich', 'München', 'Hamburg', 'Frankfurt', 'Stuttgart', 'Cologne', 'Köln',
-  'Düsseldorf', 'Leipzig', 'Vienna', 'Wien', 'Graz', 'Linz', 'Salzburg',
+  'Berlin', 'Munich', 'München', 'Hamburg', 'Frankfurt', 'Stuttgart',
+  'Cologne', 'Köln', 'Düsseldorf', 'Leipzig',
+  'Vienna', 'Wien', 'Graz', 'Linz', 'Salzburg',
   'Zurich', 'Zürich', 'Basel', 'Bern', 'Lausanne', 'Geneva', 'Genf',
 ];
 const ALL_DACH = [...DACH_LOCATIONS, ...DACH_CITIES];
 
-// Queries mirroring the spec, split by topic for better recall.
-// GitHub search uses implicit AND; use OR explicitly for language union.
+// Each query targets a product vertical relevant to DACH VC scouting.
+// Language filters are split into separate queries so GitHub's OR
+// operator isn't needed (avoids pagination edge-cases with complex q strings).
 const REPO_QUERIES = [
-  'vertical AI language:python OR language:javascript OR language:typescript',
-  '"B2B SaaS" language:python OR language:javascript OR language:typescript',
-  '"compliance AI" language:python OR language:javascript OR language:typescript',
-  '"vertical software" AI language:python OR language:typescript',
-  'deeptech startup language:python OR language:javascript',
+  'vertical AI startup language:python',
+  'vertical AI startup language:typescript',
+  '"B2B SaaS" germany language:python',
+  '"B2B SaaS" germany language:typescript',
+  'compliance fintech language:python stars:>2',
+  '"deep tech" startup language:python stars:>2',
 ];
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function makeClient() {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    console.warn('[github] GITHUB_TOKEN not set — using unauthenticated (10 req/min search limit)');
+  } else {
+    console.log('[github] GITHUB_TOKEN present — using authenticated client (5000 req/hr)');
+  }
   const headers = {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'founder-tracker/1.0',
   };
-  if (process.env.GITHUB_TOKEN) {
-    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  }
+  if (token) headers.Authorization = `Bearer ${token}`;
   return axios.create({ baseURL: GITHUB_API, timeout: 15000, headers });
 }
 
 function isDACH(location = '') {
-  return ALL_DACH.some(t => location.toLowerCase().includes(t.toLowerCase()));
+  const loc = location.toLowerCase();
+  return ALL_DACH.some(t => loc.includes(t.toLowerCase()));
 }
 
-async function fetchUserProfile(client, username) {
-  const { data } = await client.get(`/users/${username}`);
-  return data;
-}
-
-/**
- * Search repos for one query, returning up to `perPage` results from `page`.
- * Returns null on rate-limit, [] on other errors.
- */
 async function searchRepos(client, query, page = 1, perPage = 30) {
+  console.log(`[github] search: "${query}" (page ${page})`);
   try {
     const { data } = await client.get('/search/repositories', {
       params: { q: query, sort: 'updated', order: 'desc', per_page: perPage, page },
     });
+    console.log(`[github] → ${data.total_count} total results, ${data.items.length} returned`);
     return data.items ?? [];
   } catch (err) {
     const status = err.response?.status;
     if (status === 429 || status === 403) {
-      const retryAfter = parseInt(err.response.headers['retry-after'] ?? '60', 10);
-      console.warn(`[github] rate-limited — retry-after ${retryAfter}s, skipping query`);
-      return null;           // signal caller to abort this query
+      const retryAfter = parseInt(err.response?.headers?.['retry-after'] ?? '60', 10);
+      console.warn(`[github] rate-limited (${status}) — retry-after ${retryAfter}s, stopping queries`);
+      return null;
     }
     if (status === 422) {
       console.warn(`[github] invalid query "${query}": ${err.response?.data?.message}`);
@@ -70,6 +72,11 @@ async function searchRepos(client, query, page = 1, perPage = 30) {
     console.warn(`[github] search error for "${query}": ${err.message}`);
     return [];
   }
+}
+
+async function fetchUserProfile(client, username) {
+  const { data } = await client.get(`/users/${username}`);
+  return data;
 }
 
 async function processRepo(client, repo) {
@@ -91,23 +98,28 @@ async function processRepo(client, repo) {
     return null;
   }
 
-  if (!isDACH(user.location ?? '')) return null;
+  if (!isDACH(user.location ?? '')) {
+    console.log(`[github] skip ${ownerLogin} — location not DACH: "${user.location ?? '(none)'}"`);
+    return null;
+  }
 
-  // Derive thesis_keywords from repo topics + language
   const keywords = [...(repo.topics ?? [])];
   if (repo.language) keywords.push(repo.language.toLowerCase());
 
-  return {
-    name: user.name || user.login,
-    linkedin_url: null,
-    github_url: user.html_url,
-    university: null,
-    club: null,
-    hackathon: null,
-    location: user.location,
-    raw_bio: user.bio || repo.description || null,
-    thesis_keywords: [...new Set(keywords)],
+  const lead = {
+    name:             user.name || user.login,
+    linkedin_url:     null,
+    github_url:       user.html_url,
+    university:       null,
+    club:             null,
+    hackathon:        null,
+    location:         user.location,
+    raw_bio:          user.bio || repo.description || null,
+    thesis_keywords:  [...new Set(keywords)],
   };
+
+  console.log(`[github] DACH founder: ${lead.name} (${lead.location}) — ${repo.full_name}`);
+  return lead;
 }
 
 async function scrape() {
@@ -129,17 +141,28 @@ async function scrape() {
       seenOwners.add(ownerLogin);
 
       const lead = await processRepo(client, repo);
-      if (lead) {
-        leads.push(lead);
-        console.log(`[github] found DACH founder: ${lead.name} (${lead.location})`);
-      }
+      if (lead) leads.push(lead);
     }
 
     await sleep(DELAY());
   }
 
-  console.log(`[github] total leads: ${leads.length}`);
+  console.log(`[github] total DACH leads found: ${leads.length}`);
   return leads;
 }
 
 module.exports = { scrape };
+
+// ── standalone test runner ────────────────────────────────────────────────
+// Usage: node src/scrapers/github_search.js
+if (require.main === module) {
+  require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
+  scrape()
+    .then(leads => {
+      console.log('\n=== Results ===');
+      leads.forEach((l, i) => console.log(`${i + 1}. ${l.name} | ${l.location} | ${l.github_url}`));
+      console.log(`\nTotal: ${leads.length}`);
+    })
+    .catch(err => console.error('Fatal:', err.message))
+    .finally(() => process.exit(0));
+}
